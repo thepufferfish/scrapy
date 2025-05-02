@@ -45,6 +45,7 @@ class AutoThrottle:
     def _spider_opened(self, spider: Spider) -> None:
         self.mindelay = self._min_delay(spider)
         self.maxdelay = self._max_delay(spider)
+        self.exponential_backoff = self._exponential_backoff(spider)
         spider.download_delay = self._start_delay(spider)  # type: ignore[attr-defined]
 
     def _min_delay(self, spider: Spider) -> float:
@@ -58,6 +59,8 @@ class AutoThrottle:
         return max(
             self.mindelay, self.crawler.settings.getfloat("AUTOTHROTTLE_START_DELAY")
         )
+    def _exponential_backoff(self, spider: Spider) -> bool:
+        return self.crawler.settings.getbool("AUTOTHROTTLE_EXPONENTIAL_BACKOFF")
 
     def _response_downloaded(
         self, response: Response, request: Request, spider: Spider
@@ -119,11 +122,11 @@ class AutoThrottle:
         # Make sure self.mindelay <= new_delay <= self.max_delay
         new_delay = min(max(self.mindelay, new_delay), self.maxdelay)
 
-        # Dont adjust delay if response status != 200 and new delay is smaller
-        # than old one, as error pages (and redirections) are usually small and
-        # so tend to reduce latency, thus provoking a positive feedback by
-        # reducing delay instead of increase.
-        if response.status != 200 and new_delay <= slot.delay:
-            return
+        if response.status != 200:
+            # Apply exponential backoff capped at maxdelay if response status != 200
+            if self.exponential_backoff:
+                new_delay = min(slot.delay * 2, self.maxdelay)
+            elif new_delay <= slot.delay:
+                return
 
         slot.delay = new_delay
